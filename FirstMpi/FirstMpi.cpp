@@ -3,10 +3,52 @@
 #include <string>
 #include <fstream>
 #include <algorithm>
+#include <limits>
 #include "mpi.h"
 
 using namespace std;
 
+string ValidFile(const string& prompt)
+{
+    string filename;
+    bool fileExists = false;
+
+    while (!fileExists) {
+        cout << prompt;
+        cin >> filename;
+
+        ifstream file(filename);
+        if (file.good()) {
+            fileExists = true;
+            file.close();
+        }
+        else {
+            cout << "File not found. Please try again.\n";
+        }
+    }
+
+    return filename;
+}
+int ValidInput(const string& prompt) {
+    int n;
+    while (true) {
+        cout << prompt;
+        cin >> n;
+
+        if (cin.fail()) {
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            cout << "Invalid input. Please enter a valid number.\n";
+        }
+        else if (n <= 0) {
+            cout << "Number must be positive. Try again.\n";
+        }
+        else {
+            break;
+        }
+    }
+    return n;
+}
 // Reading Data
 vector<int> read_data_from_file(const string& filename) {
     ifstream file(filename);
@@ -68,11 +110,9 @@ void quick_search(int rank, int size) {
         cout << "Quick Search Selected\n";
         cout << "------------------------------\n";
         string filename;
-        cout << "Please enter the path to the input file: ";
         input_time_start = MPI_Wtime();
-        cin >> filename;
-        cout << "Enter Search Target: ";
-        cin >> target;
+        filename = ValidFile("Please enter the path to the input file: ");
+        target = ValidInput("Enter Search Target: ");
         input_time_end = MPI_Wtime();
 
         cout << "Reading data from file...\n";
@@ -164,11 +204,13 @@ void prime_number_finding(int rank, int size) {
     if (rank == 0) {
         cout << "Prime Number Finding Selected\n";
         cout << "----------------------------------\n";
-        cout << "Enter start of range: ";
         input_start = MPI_Wtime();
-        cin >> start_range;
-        cout << "Enter end of range: ";
-        cin >> end_range;
+        start_range = ValidInput("Enter start of range: ");
+        while(end_range <= start_range)
+        { 
+            cout << "End of range MUST be grater than start of range...\n";
+            end_range = ValidInput("Enter end of range: ");
+        }
         input_end = MPI_Wtime();
     }
 
@@ -274,13 +316,13 @@ int main(int argc, char* argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     if (rank == 0) {
-        std::cout << "[INFO] Number of processes: " << size << std::endl;
+        cout << "[INFO] Number of processes: " << size << endl;
     }
 
     char choice = 'Y';
     while (choice == 'Y' || choice == 'y') 
     {
-        int algorithm_choice;
+        int algorithm_choice=10;
 
         if (rank == 0) {
             cout << "===============================================\n";
@@ -293,7 +335,12 @@ int main(int argc, char* argv[]) {
             cout << "04 - Radix Sort\n";
             cout << "05 - Sample Sort\n";
             cout << "Enter the number of the algorithm to run: ";
-            cin >> algorithm_choice;
+            while(algorithm_choice > 5 || algorithm_choice < 1)
+            {
+                cout << "Number MUST be from 1 TO 5 \n"; 
+                algorithm_choice = ValidInput("Enter the number of the algorithm to run: ");
+            }
+
         }
 
 
@@ -307,7 +354,6 @@ int main(int argc, char* argv[]) {
         case 4: radix_sort(rank, size); break;
         case 5: sample_sort(rank, size); break;
         default:
-            if (rank == 0) cout << "Invalid choice!\n";
             break;
         }
 
