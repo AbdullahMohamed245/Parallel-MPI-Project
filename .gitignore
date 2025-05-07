@@ -1,0 +1,9 @@
+*.exe
+*.obj
+*.pdb
+*.dll
+*.ipch
+*.vcxproj.user
+x64/
+Debug/
+.vscode/
