@@ -155,47 +155,114 @@ void quick_search(int rank, int size) {
 }
 
 void prime_number_finding(int rank, int size) {
-    double start_time = MPI_Wtime();
+    double total_start_time = MPI_Wtime();
+
+    int start_range = 0, end_range = 0;
+    vector<int> local_primes;
+    double input_start, input_end, compute_start, compute_end;
+
     if (rank == 0) {
         cout << "Prime Number Finding Selected\n";
-        cout << "------------------------------\n";
-        cout << "This function is under development.\n";
-        double end_time = MPI_Wtime();
-        cout << "Execution time: " << (end_time - start_time) << " seconds\n";
+        cout << "----------------------------------\n";
+        cout << "Enter start of range: ";
+        input_start = MPI_Wtime();
+        cin >> start_range;
+        cout << "Enter end of range: ";
+        cin >> end_range;
+        input_end = MPI_Wtime();
+    }
+
+    // Broadcast the input range to all processes
+    MPI_Bcast(&start_range, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&end_range, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Calculate local range
+    int total_numbers = end_range - start_range + 1;
+    int base = total_numbers / size;
+    int remainder = total_numbers % size;
+    int local_start, local_end;
+
+    if (rank < remainder) {
+        local_start = start_range + rank * (base + 1);
+        local_end = local_start + base;
+    }
+    else {
+        local_start = start_range + rank * base + remainder;
+        local_end = local_start + base - 1;
+    }
+
+    // Check for prime numbers in local range
+    compute_start = MPI_Wtime();
+    for (int i = max(2, local_start); i <= local_end; i++) {
+        bool is_prime = true;
+        for (int j = 2; j * j <= i; j++) {
+            if (i % j == 0) {
+                is_prime = false;
+                break;
+            }
+        }
+        if (is_prime) {
+            local_primes.push_back(i);
+        }
+    }
+    compute_end = MPI_Wtime();
+
+    // Gather counts first
+    int local_count = local_primes.size();
+    vector<int> counts(size);
+    MPI_Gather(&local_count, 1, MPI_INT, counts.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Gather displacements
+    vector<int> displs(size);
+    int total_primes = 0;
+    if (rank == 0) {
+        displs[0] = 0;
+        for (int i = 1; i < size; ++i) {
+            displs[i] = displs[i - 1] + counts[i - 1];
+        }
+        total_primes = displs[size - 1] + counts[size - 1];
+    }
+
+    // Gather all primes to master
+    vector<int> all_primes(total_primes);
+    MPI_Gatherv(local_primes.data(), local_count, MPI_INT,
+        all_primes.data(), counts.data(), displs.data(), MPI_INT,
+        0, MPI_COMM_WORLD);
+
+
+    if (rank == 0) {
+        double total_input = input_end - input_start;
+        double total_compute = compute_end - compute_start;
+
+        ofstream outfile("prime_output.txt");
+        outfile << "Total Prime Numbers Found: " << all_primes.size() << "\n";
+        outfile << "========== Prime Numbers ==========\n";
+        for (int p : all_primes) {
+            outfile << p << " ";
+        }
+        outfile.close();
+
+        double total_end_time = MPI_Wtime();
+        double total_duration = total_end_time - total_start_time - total_input;
+
+        cout << "Prime numbers to prime_output.txt\n";
+        cout << "\n\n========== Time ==========\n";
+        cout << "Total Compute Time: " << total_compute << " seconds\n";
+        cout << "Total Execution Time: " << total_duration << " seconds\n";
+        cout << "==================================\n";
     }
 }
 
 void bitonic_sort(int rank, int size) {
-    double start_time = MPI_Wtime();
-    if (rank == 0) {
-        cout << "Bitonic Sort Selected\n";
-        cout << "------------------------------\n";
-        cout << "This function is under development.\n";
-        double end_time = MPI_Wtime();
-        cout << "Execution time: " << (end_time - start_time) << " seconds\n";
-    }
+   
 }
 
 void radix_sort(int rank, int size) {
-    double start_time = MPI_Wtime();
-    if (rank == 0) {
-        cout << "Radix Sort Selected\n";
-        cout << "------------------------------\n";
-        cout << "This function is under development.\n";
-        double end_time = MPI_Wtime();
-        cout << "Execution time: " << (end_time - start_time) << " seconds\n";
-    }
+   
 }
 
 void sample_sort(int rank, int size) {
-    double start_time = MPI_Wtime();
-    if (rank == 0) {
-        cout << "Sample Sort Selected\n";
-        cout << "------------------------------\n";
-        cout << "This function is under development.\n";
-        double end_time = MPI_Wtime();
-        cout << "Execution time: " << (end_time - start_time) << " seconds\n";
-    }
+    
 }
 
 
@@ -211,7 +278,8 @@ int main(int argc, char* argv[]) {
     }
 
     char choice = 'Y';
-    while (choice == 'Y' || choice == 'y') {
+    while (choice == 'Y' || choice == 'y') 
+    {
         int algorithm_choice;
 
         if (rank == 0) {
@@ -228,6 +296,8 @@ int main(int argc, char* argv[]) {
             cin >> algorithm_choice;
         }
 
+
+       
         MPI_Bcast(&algorithm_choice, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
         switch (algorithm_choice) {
