@@ -29,6 +29,7 @@ string ValidFile(const string& prompt)
 
     return filename;
 }
+
 int ValidInput(const string& prompt) {
     int n;
     while (true) {
@@ -49,6 +50,7 @@ int ValidInput(const string& prompt) {
     }
     return n;
 }
+
 // Reading Data
 vector<int> read_data_from_file(const string& filename) {
     ifstream file(filename);
@@ -65,46 +67,86 @@ vector<int> read_data_from_file(const string& filename) {
     return data;
 }
 
-// Distributig Data
-void distribute_data(const vector<int>& data, int size, int rank, vector<int>& local_data, int& local_size) {
-    if (rank == 0) {
-        int total_size = data.size();
-        int base_size = total_size / size;
-        int remainder = total_size % size;
-        int start = 0;
-        for (int i = 0; i < size; i++) {
-            int current_size = base_size + (i < remainder ? 1 : 0);
-            if (i == rank) {
-                local_data.assign(data.begin() + start, data.begin() + start + current_size);
-                local_size = current_size;
-            }
-            else {
-                MPI_Send(&data[start], current_size, MPI_INT, i, 0, MPI_COMM_WORLD);
-            }
-            start += current_size;
-        }
+// دالة توزيع البيانات باستخدام الشجرة الثنائية
+void scatter_recursive(int low, int high, vector<int>& current_data, vector<int>& local_data, int N, int size, int rank) {
+    if (low == high) {
+        local_data = current_data; // العملية تحتفظ بالبيانات بتاعتها
     }
     else {
-        MPI_Status status;
-        int count;
-        MPI_Probe(0, 0, MPI_COMM_WORLD, &status);
-        MPI_Get_count(&status, MPI_INT, &count);
-        local_data.resize(count);
-        MPI_Recv(local_data.data(), count, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        local_size = count;
+        int mid = low + (high - low) / 2; // نص الشجرة
+        if (rank == low && mid + 1 <= high) {
+            // حساب عدد العناصر للنص اليمين
+            int total_elements_right = 0;
+            int base_size = N / size;
+            int remainder = N % size;
+            for (int r = mid + 1; r <= high; r++) {
+                int current_size = base_size + (r < remainder ? 1 : 0);
+                total_elements_right += current_size;
+            }
+            // إرسال النص اليمين للعملية mid+1
+            vector<int> data_for_right(current_data.end() - total_elements_right, current_data.end());
+            MPI_Send(data_for_right.data(), data_for_right.size(), MPI_INT, mid + 1, 0, MPI_COMM_WORLD);
+            // الاحتفاظ بالنص الشمال
+            current_data.resize(current_data.size() - total_elements_right);
+        }
+        else if (rank == mid + 1 && low <= mid) {
+            // استقبال البيانات من العملية low
+            int total_elements_right = 0;
+            int base_size = N / size;
+            int remainder = N % size;
+            for (int r = mid + 1; r <= high; r++) {
+                int current_size = base_size + (r < remainder ? 1 : 0);
+                total_elements_right += current_size;
+            }
+            current_data.resize(total_elements_right);
+            MPI_Recv(current_data.data(), total_elements_right, MPI_INT, low, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+        // التكرار على الشجرة الفرعية
+        if (rank <= mid) {
+            scatter_recursive(low, mid, current_data, local_data, N, size, rank);
+        }
+        else {
+            scatter_recursive(mid + 1, high, current_data, local_data, N, size, rank);
+        }
     }
 }
 
+// دالة جمع النتايج باستخدام الشجرة الثنائية
+void gather_recursive(int low, int high, int& result, int rank, int size) {
+    if (low == high) {
+        // لو وصلنا لعملية واحدة، النتيجة جاهزة
+    }
+    else {
+        int mid = low + (high - low) / 2;
+        if (rank <= mid) {
+            gather_recursive(low, mid, result, rank, size);
+        }
+        else {
+            gather_recursive(mid + 1, high, result, rank, size);
+        }
+        if (rank == low && mid + 1 <= high) {
+            // استقبال النتيجة من الشجرة اليمين
+            int received_result;
+            MPI_Recv(&received_result, 1, MPI_INT, mid + 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            // دمج النتيجة مع أقل مؤشر
+            if (received_result != -1 && (result == -1 || received_result < result)) {
+                result = received_result;
+            }
+        }
+        else if (rank == mid + 1 && low <= mid) {
+            // إرسال النتيجة للعملية low
+            MPI_Send(&result, 1, MPI_INT, low, 0, MPI_COMM_WORLD);
+        }
+    }
+}
 
 void quick_search(int rank, int size) {
-    double total_start_time = MPI_Wtime(); 
+    double total_start_time = MPI_Wtime();
 
     int target;
     vector<int> data;
     vector<int> local_data;
-    int local_size;
-    double file_read_start, file_read_end ,search_start, search_end, input_time_start , input_time_end;
-   
+    double file_read_start, file_read_end, search_start, search_end, input_time_start, input_time_end;
 
     if (rank == 0) {
         cout << "Quick Search Selected\n";
@@ -121,61 +163,54 @@ void quick_search(int rank, int size) {
         file_read_end = MPI_Wtime();
     }
 
+    // نشر target لكل العمليات
     MPI_Bcast(&target, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    distribute_data(data, size, rank, local_data, local_size);
-
-    int start_index = 0;
-    vector<int> displacements(size, 0);
+    // نشر عدد العناصر N
+    int N;
     if (rank == 0) {
-        int total_size = data.size();
-        int base_size = total_size / size;
-        int remainder = total_size % size;
-        int offset = 0;
-        for (int i = 0; i < size; ++i) {
-            displacements[i] = offset;
-            int current_size = base_size + (i < remainder ? 1 : 0);
-            offset += current_size;
-        }
+        N = data.size();
+    }
+    MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // توزيع البيانات باستخدام الشجرة الثنائية
+    vector<int> current_data;
+    if (rank == 0) {
+        current_data = data;
+    }
+    scatter_recursive(0, size - 1, current_data, local_data, N, size, rank);
+
+    // حساب المؤشر العام للبداية
+    int base_size = N / size;
+    int remainder = N % size;
+    int start_index;
+    if (rank < remainder) {
+        start_index = rank * (base_size + 1);
+    }
+    else {
+        start_index = remainder * (base_size + 1) + (rank - remainder) * base_size;
     }
 
-    MPI_Scatter(displacements.data(), 1, MPI_INT, &start_index, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
+    // البحث المحلي
     search_start = MPI_Wtime();
     int local_result = -1;
-    for (int i = 0; i < local_size; i++) {
+    for (int i = 0; i < local_data.size(); i++) {
         if (local_data[i] == target) {
-            local_result = i;
-            break;
+            int global_index = start_index + i;
+            if (local_result == -1 || global_index < local_result) {
+                local_result = global_index;
+            }
         }
     }
     search_end = MPI_Wtime();
 
-    int global_result = (local_result != -1) ? start_index + local_result : -1;
-
-    vector<int> all_results(size);
-    vector<double> all_search_times(size);
-    MPI_Gather(&global_result, 1, MPI_INT, all_results.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-    double local_search_duration = search_end - search_start;
-    MPI_Gather(&local_search_duration, 1, MPI_DOUBLE, all_search_times.data(), 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    // جمع النتايج باستخدام الشجرة الثنائية
+    int global_result = local_result;
+    gather_recursive(0, size - 1, global_result, rank, size);
 
     if (rank == 0) {
-        int final_result = -1;
-        int found_by = -1;
-        double search_time = 0.0;
-        for (int i = 0; i < size; i++) {
-            if (all_results[i] != -1) {
-                final_result = all_results[i];
-                found_by = i;
-                search_time = all_search_times[i];
-                break;
-            }
-        }
-
-        if (final_result != -1) {
-            cout << "[Process " << found_by << "] Found value " << target << " at index " << final_result << endl;
-            cout << "Result: Value " << target << " found at index " << final_result << endl;
+        if (global_result != -1) {
+            cout << "Result: Value " << target << " found at index " << global_result << endl;
         }
         else {
             cout << "Result: Value " << target << " not found\n";
@@ -185,6 +220,7 @@ void quick_search(int rank, int size) {
         double total_input = input_time_end - input_time_start;
         double total_duration = total_end_time - total_start_time - total_input;
         double file_read_duration = file_read_end - file_read_start;
+        double search_time = search_end - search_start;
 
         cout << "\n========== Time ==========\n";
         cout << " File Reading Time      : " << file_read_duration << " seconds\n";
@@ -206,8 +242,8 @@ void prime_number_finding(int rank, int size) {
         cout << "----------------------------------\n";
         input_start = MPI_Wtime();
         start_range = ValidInput("Enter start of range: ");
-        while(end_range <= start_range)
-        { 
+        while (end_range <= start_range)
+        {
             cout << "End of range MUST be grater than start of range...\n";
             end_range = ValidInput("Enter end of range: ");
         }
@@ -271,7 +307,6 @@ void prime_number_finding(int rank, int size) {
         all_primes.data(), counts.data(), displs.data(), MPI_INT,
         0, MPI_COMM_WORLD);
 
-
     if (rank == 0) {
         double total_input = input_end - input_start;
         double total_compute = compute_end - compute_start;
@@ -296,18 +331,16 @@ void prime_number_finding(int rank, int size) {
 }
 
 void bitonic_sort(int rank, int size) {
-   
+
 }
 
 void radix_sort(int rank, int size) {
-   
+
 }
 
 void sample_sort(int rank, int size) {
-    
+
 }
-
-
 
 int main(int argc, char* argv[]) {
     int rank, size;
@@ -320,9 +353,9 @@ int main(int argc, char* argv[]) {
     }
 
     char choice = 'Y';
-    while (choice == 'Y' || choice == 'y') 
+    while (choice == 'Y' || choice == 'y')
     {
-        int algorithm_choice=10;
+        int algorithm_choice = 10;
 
         if (rank == 0) {
             cout << "===============================================\n";
@@ -335,16 +368,13 @@ int main(int argc, char* argv[]) {
             cout << "04 - Radix Sort\n";
             cout << "05 - Sample Sort\n";
             cout << "Enter the number of the algorithm to run: ";
-            while(algorithm_choice > 5 || algorithm_choice < 1)
+            while (algorithm_choice > 5 || algorithm_choice < 1)
             {
-                cout << "Number MUST be from 1 TO 5 \n"; 
+                cout << "Number MUST be from 1 TO 5 \n";
                 algorithm_choice = ValidInput("Enter the number of the algorithm to run: ");
             }
-
         }
 
-
-       
         MPI_Bcast(&algorithm_choice, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
         switch (algorithm_choice) {
